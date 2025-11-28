@@ -89,6 +89,43 @@ def parser_error(errmsg):
     print(R + "Error: " + errmsg + W)
     sys.exit()
 
+import re
+from bs4 import BeautifulSoup
+import logging
+
+logger = logging.getLogger(__name__)
+
+def get_csrftoken(resp):
+    """
+    Return CSRF token string if found, otherwise None.
+    Accepts resp as HTML string.
+    """
+    if not resp:
+        return None
+
+    # try regex first (fast and robust for simple forms)
+    try:
+        csrf_regex = re.compile(
+            r'<input[^>]*name=["\']csrfmiddlewaretoken["\'][^>]*value=["\'](.*?)["\']',
+            re.I | re.S
+        )
+        matches = csrf_regex.findall(resp)
+        if matches:
+            return matches[0].strip()
+    except Exception as e:
+        logger.debug("Regex CSRF extraction failed: %s", e)
+
+    # fallback to BeautifulSoup parsing
+    try:
+        soup = BeautifulSoup(resp, "html.parser")
+        inp = soup.find("input", {"name": "csrfmiddlewaretoken"})
+        if inp and inp.has_attr("value"):
+            return inp["value"].strip()
+    except Exception as e:
+        logger.debug("BeautifulSoup parsing failed: %s", e)
+
+    logger.warning("DNSdumpster CSRF token not found; skipping DNSdumpster source")
+    return None
 
 def parse_args():
     # parse the arguments
@@ -637,32 +674,9 @@ class DNSdumpster(enumratorBaseThreaded):
         return self.get_response(resp)
 
     def get_csrftoken(self, resp):
-        """
-        Return CSRF token string or None if not found.
-        Tries regex first, then falls back to BeautifulSoup HTML parsing.
-        """
-        import re
-        from bs4 import BeautifulSoup
-        import logging
-        logger = logging.getLogger(__name__)
-        csrf_regex = re.compile(r'<input type="hidden" name="csrfmiddlewaretoken" value="(.*?)">', re.S)
-        # safe regex attempt
-        matches = csrf_regex.findall(resp)
-        if matches:
-            return matches[0].strip()
-
-        # fallback to HTML parsing
-        try:
-            soup = BeautifulSoup(resp, "html.parser")
-            inp = soup.find("input", {"name": "csrfmiddlewaretoken"})
-            if inp and inp.has_attr("value"):
-                return inp["value"].strip()
-        except Exception as e:
-            logger.debug("BeautifulSoup parsing failed: %s", e)
 
         # nothing found
-        logger.warning("DNSdumpster CSRF token not found; skipping DNSdumpster source")
-        return None
+        return globals().get('get_csrftoken')(resp)
 
 
 
