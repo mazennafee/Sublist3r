@@ -72,7 +72,7 @@ def no_color():
 
 
 def banner():
-    print("""%s
+    print(r"""%s
                  ____        _     _ _     _   _____
                 / ___| _   _| |__ | (_)___| |_|___ / _ __
                 \___ \| | | | '_ \| | / __| __| |_ \| '__|
@@ -340,7 +340,7 @@ class YahooEnum(enumratorBaseThreaded):
             links2 = link_regx2.findall(resp)
             links_list = links + links2
             for link in links_list:
-                link = re.sub("<(\/)?b>", "", link)
+                link = re.sub(r"</?b>", "", link)
                 if not link.startswith('http'):
                     link = "http://" + link
                 subdomain = urlparse.urlparse(link).netloc
@@ -436,7 +436,7 @@ class BingEnum(enumratorBaseThreaded):
             links_list = links + links2
 
             for link in links_list:
-                link = re.sub('<(\/)?strong>|<span.*?>|<|>', '', link)
+                link = re.sub(r'</?strong>|<span.*?>|<|>', '', link)
                 if not link.startswith('http'):
                     link = "http://" + link
                 subdomain = urlparse.urlparse(link).netloc
@@ -637,14 +637,43 @@ class DNSdumpster(enumratorBaseThreaded):
         return self.get_response(resp)
 
     def get_csrftoken(self, resp):
-        csrf_regex = re.compile('<input type="hidden" name="csrfmiddlewaretoken" value="(.*?)">', re.S)
-        token = csrf_regex.findall(resp)[0]
-        return token.strip()
+        """
+        Return CSRF token string or None if not found.
+        Tries regex first, then falls back to BeautifulSoup HTML parsing.
+        """
+        import re
+        from bs4 import BeautifulSoup
+        import logging
+        logger = logging.getLogger(__name__)
+        csrf_regex = re.compile(r'<input type="hidden" name="csrfmiddlewaretoken" value="(.*?)">', re.S)
+        # safe regex attempt
+        matches = csrf_regex.findall(resp)
+        if matches:
+            return matches[0].strip()
+
+        # fallback to HTML parsing
+        try:
+            soup = BeautifulSoup(resp, "html.parser")
+            inp = soup.find("input", {"name": "csrfmiddlewaretoken"})
+            if inp and inp.has_attr("value"):
+                return inp["value"].strip()
+        except Exception as e:
+            logger.debug("BeautifulSoup parsing failed: %s", e)
+
+        # nothing found
+        logger.warning("DNSdumpster CSRF token not found; skipping DNSdumpster source")
+        return None
+
+
 
     def enumerate(self):
         self.lock = threading.BoundedSemaphore(value=70)
         resp = self.req('GET', self.base_url)
         token = self.get_csrftoken(resp)
+        if not token:
+            # skip DNSdumpster passive source gracefully
+            return []
+        # continue using token below    
         params = {'csrfmiddlewaretoken': token, 'targetip': self.domain}
         post_resp = self.req('POST', self.base_url, params)
         self.extract_domains(post_resp)
@@ -655,7 +684,7 @@ class DNSdumpster(enumratorBaseThreaded):
         return self.live_subdomains
 
     def extract_domains(self, resp):
-        tbl_regex = re.compile('<a name="hostanchor"><\/a>Host Records.*?<table.*?>(.*?)</table>', re.S)
+        tbl_regex = re.compile(r'<a name="hostanchor"></a>Host Records.*?<table.*?>(.*?)</table>', re.S)
         link_regex = re.compile('<td class="col-md-4">(.*?)<br>', re.S)
         links = []
         try:
@@ -895,7 +924,7 @@ def main(domain, threads, savefile, ports, silent, verbose, enable_bruteforce, e
         enable_bruteforce = True
 
     # Validate domain
-    domain_check = re.compile("^(http|https)?[a-zA-Z0-9]+([\-\.]{1}[a-zA-Z0-9]+)*\.[a-zA-Z]{2,}$")
+    domain_check = re.compile(r'^(http|https)?[A-Za-z0-9]+([-.]{1}[A-Za-z0-9]+)*\.[A-Za-z]{2,}$')
     if not domain_check.match(domain):
         if not silent:
             print(R + "Error: Please enter a valid domain" + W)
